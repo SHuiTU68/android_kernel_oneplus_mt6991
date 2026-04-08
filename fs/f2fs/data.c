@@ -2441,9 +2441,12 @@ skip_reading_dnode:
 	}
 
 	for (i = 0; i < cc->nr_cpages; i++) {
-		struct folio *folio = page_folio(dic->cpages[i]);
+		struct folio *folio = NULL;
 		block_t blkaddr;
 		struct bio_post_read_ctx *ctx;
+
+		if (dic->cpages[i])
+			folio = page_folio(dic->cpages[i]);
 
 #ifdef CONFIG_F2FS_FS_COMPRESSION_FIXED_OUTPUT
 		if (!folio) {

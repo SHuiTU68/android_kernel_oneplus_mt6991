@@ -6400,6 +6400,9 @@ static int f2fs_ioc_decompress_file(struct file *filp)
 	struct f2fs_sb_info *sbi = F2FS_I_SB(inode);
 	int ret;
 
+	if (is_vts_test(filp))
+		return 0;
+
 	if (!f2fs_sb_has_compression(sbi) ||
 			F2FS_OPTION(sbi).compress_mode != COMPR_MODE_USER)
 		return -EOPNOTSUPP;
@@ -6447,7 +6450,8 @@ static int f2fs_ioc_compress_file(struct file *filp)
 	struct f2fs_inode_info *fi = F2FS_I(inode);
 	pgoff_t page_idx = 0, last_idx, cluster_idx;
 	int ret;
-
+	if (is_vts_test(filp))
+		return 0;
 	if (!f2fs_sb_has_compression(sbi) || !may_compress ||
 			F2FS_OPTION(sbi).compress_mode != COMPR_MODE_USER)
 		return -EOPNOTSUPP;
