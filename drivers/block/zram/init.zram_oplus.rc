@@ -1,0 +1,85 @@
+# SPDX-License-Identifier: GPL-2.0
+#
+# zram swap 配置: 保后台优化 (针对 MT6991 / Dimensity 9400)
+#
+# 设计目标:
+#   1. 默认 zstd 压缩 (CONFIG_ZRAM_DEF_COMP_ZSTD=y, level 由 CONFIG_CRYPTO_ZSTD_LEVEL 控制)
+#   2. writeback: 把压不下的 huge 页 (约 30% 写入数据) 挪到闪存, 释放 zram 内存给可压缩页
+#   3. recompress: 对 idle 的中等大小页用 lz4hc 二次压缩, 进一步省内存
+#   4. 灭屏触发: 屏幕关闭时标记 idle + 触发 writeback/recompress
+#
+# 依赖内核 CONFIG (已在 gki_defconfig 启用):
+#   CONFIG_ZRAM=y
+#   CONFIG_ZRAM_DEF_COMP_ZSTD=y
+#   CONFIG_ZRAM_WRITEBACK=y
+#   CONFIG_ZRAM_TRACK_ENTRY_ACTIME=y
+#   CONFIG_ZRAM_MULTI_COMP=y
+#   CONFIG_CRYPTO_ZSTD=y
+#   CONFIG_CRYPTO_ZSTD_LEVEL=3
+#   CONFIG_CRYPTO_LZ4HC=y  (secondary recompress 算法, 需在 defconfig 确认)
+#
+# 部署: 将本文件放到 ramdisk 的 /system/etc/init/ 或合并到 init.<device>.rc
+#        backing_dev 路径需在 fstab 里先创建并格式化 (见文末说明)
+
+# === 1. 创建 zram0 swap 设备 (early boot) ===
+# disksize: 8 GiB (物理内存 ~12-16G 的一半左右, swap 友好)
+# 若物理内存不同, 按约 50% 物理内存调整
+on early-init
+    write /sys/block/zram0/disksize 8589934592
+
+on init
+    # secondary 重压缩算法: lz4hc (压缩率高于 lz4, 速度可接受, 用于二次压缩)
+    # 若 CONFIG_CRYPTO_LZ4HC 未编入, 改用 lz4: "algo=lz4 priority=1"
+    write /sys/block/zram0/recomp_algorithm "algo=lz4hc priority=1"
+
+    # 启用 swap
+    swapon_all /vendor/etc/fstab.<device>
+
+# === 2. writeback backing device (需要 fstab 配合) ===
+# backing_dev 必须是块设备 (分区或 loop 文件). 推荐:
+#   方案 A (推荐): 独立分区, 在 fstab 里 /dev/block/by-name/zram_wb 挂载点
+#   方案 B: 在 /data 上建一个文件, loop 设备
+#
+# 下方用方案 B (无需改分区表, 最易落地). 路径: /data/perf/zram_wb
+on post-fs-data
+    mkdir /data/perf 0771 root root
+    # 创建 2 GiB backing 文件 (容纳 ~581MiB huge 页 + 余量)
+    # 用 dd 预分配, 避免运行时分配抖动
+    exec - root -- /system/bin/sh -c "if [ ! -f /data/perf/zram_wb ]; then dd if=/dev/zero of=/data/perf/zram_wb bs=1M count=2048 2>/dev/null; fi"
+    # 关联到 zram writeback
+    write /sys/block/zram0/backing_dev /data/perf/zram_wb
+
+# === 3. 灭屏触发 writeback + recompress (保后台核心) ===
+# 屏幕关闭时:
+#   a) 标记所有页为 idle (为后续 idle writeback/recompress 提供候选)
+#   b) 把 idle 的 huge 页写回闪存 (释放 zram 内存)
+#   c) 对 idle 的中等页做 lz4hc 二次压缩
+# screen-off 在 Android 上由 sysui 触发, 这里监听对应的属性/uevent
+on property:sys.screen_off=1
+    # 标记 idle: 之后未被访问的页会被标记
+    write /sys/block/zram0/idle idle
+    # writeback idle+huge 页 (压不下的挪到闪存)
+    write /sys/block/zram0/writeback huge_idle
+    # 对 idle 页做二次压缩 (threshold 3000 = 对 >3K 的页尝试二次压缩)
+    write /sys/block/zram0/recompress "type=idle threshold=3000"
+
+# === 4. 定期 writeback (可选, 配合 init.rc 的定时触发) ===
+# 每 10 分钟把 idle 页写回一次 (需要 bootcompleted 后用 cron/job 等触发)
+# 这里只定义触发动作, 实际定时由 Android JobScheduler 或 init 的 on timer 实现
+on property:persist.sys.zram_wb_periodic=1
+    write /sys/block/zram0/idle idle
+    write /sys/block/zram0/writeback idle
+
+# === 说明 ===
+# 1. backing_dev 方案 B (loop 文件) 在内核 6.6 支持, 但性能略低于独立分区.
+#    若设备有可用的独立分区, 改为: write /sys/block/zram0/backing_dev /dev/block/by-name/zram_wb
+# 2. writeback_limit_enable / writeback_limit: 可限制每次写回页数, 避免一次性写太多闪存.
+#    默认不限制 (writeback_limit_enable=0). 如需限制:
+#      write /sys/block/zram0/writeback_limit_enable 1
+#      write /sys/block/zram0/writeback_limit 256   (每次最多 256 页 = 1MiB)
+# 3. recompress threshold 必须 < huge_class_size (约 3264 字节).
+#    设 3000 是安全值; 设更小会跳过更多页, 设更大接近上限可能 -EINVAL.
+# 4. huge_pages 不可 recompress (comp_len=PAGE_SIZE >= huge_class_size),
+#    所以对那 ~581MiB huge 页, 只有 writeback 有效 —— 这是保后台的关键.
+# 5. disksize 8G 对应 12-16G 物理内存. 若物理内存更小, 按约 50% 调整:
+#    8G RAM -> disksize 4G; 12G -> 6G; 16G -> 8G.
