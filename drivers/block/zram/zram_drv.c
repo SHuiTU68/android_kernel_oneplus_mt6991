@@ -49,15 +49,12 @@ static const char *default_compressor = CONFIG_ZRAM_DEF_COMP;
  *
  *   auto_disksize:  自动设置的 disksize (字节), 0 = 不自动配置.
  *                   默认 8 GiB (适配 12-16 GiB 物理内存, 约 50%).
- *   auto_recomp:    secondary 重压缩算法名, "" = 不配置.
- *                   默认 "lz4hc" (需 CONFIG_CRYPTO_LZ4HC).
  *
- * 这两项只在 zram_add() 创建设备时生效一次, 之后仍可通过 sysfs 覆盖.
- * writeback 的 backing_dev 需要块设备且时序严格 (必须在 disksize 前),
- * 无法在纯内核态自动配置, 仍需 userland 设置.
+ * 只在 zram_add() 创建设备时生效一次, 之后仍可通过 sysfs 覆盖.
+ * primary 压缩算法由 CONFIG_ZRAM_DEF_COMP 决定 (默认 zstd),
+ * zstd 压缩级别由 CONFIG_CRYPTO_ZSTD_LEVEL 决定 (默认 3).
  */
 static u64 auto_disksize = 8589934592ULL; /* 8 GiB */
-static char auto_recomp[CRYPTO_MAX_ALG_NAME] = "lz4hc";
 
 /* Module params (documentation at end) */
 static unsigned int num_devices = 1;
@@ -2116,27 +2113,14 @@ out_unlock:
 
 /*
  * OPLUS: auto-configure zram0 at module load, no userland needed.
- * 顺序: 先设 secondary recompress 算法 (在 init_done 之前), 再设 disksize
- * (触发 zcomp_create 对所有 prio 生效).
+ * 设 disksize (触发 zcomp_create 对 primary algo 生效).
  */
 static void zram_auto_config(struct zram *zram)
 {
 	char buf[32];
 	int ret;
 
-	/* secondary recompress algorithm (lz4hc by default) */
-	if (auto_recomp[0] != '\0') {
-		ret = __comp_algorithm_store(zram, ZRAM_SECONDARY_COMP,
-					     auto_recomp);
-		if (ret)
-			pr_warn("auto-config: recomp algorithm '%s' failed: %d\n",
-				auto_recomp, ret);
-		else
-			pr_info("auto-config: secondary recompress = %s\n",
-				auto_recomp);
-	}
-
-	/* disksize (triggers zcomp_create for all configured priorities) */
+	/* disksize (triggers zcomp_create for primary priority) */
 	if (auto_disksize != 0) {
 		snprintf(buf, sizeof(buf), "%llu", auto_disksize);
 		ret = disksize_store(disk_to_dev(zram->disk), NULL, buf,
@@ -2545,10 +2529,6 @@ MODULE_PARM_DESC(num_devices, "Number of pre-created zram devices");
 module_param(auto_disksize, ullong, 0644);
 MODULE_PARM_DESC(auto_disksize,
 		 "Auto-set zram0 disksize in bytes at module load (0=disable)");
-
-module_param_string(auto_recomp, auto_recomp, sizeof(auto_recomp), 0644);
-MODULE_PARM_DESC(auto_recomp,
-		 "Auto-set zram0 secondary recompress algorithm (empty=disable)");
 
 MODULE_LICENSE("Dual BSD/GPL");
 MODULE_AUTHOR("Nitin Gupta <ngupta@vflare.org>");
