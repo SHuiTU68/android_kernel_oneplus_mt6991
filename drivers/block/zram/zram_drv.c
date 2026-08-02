@@ -54,7 +54,7 @@ static const char *default_compressor = CONFIG_ZRAM_DEF_COMP;
  * primary 压缩算法由 CONFIG_ZRAM_DEF_COMP 决定 (默认 zstd),
  * zstd 压缩级别由 CONFIG_CRYPTO_ZSTD_LEVEL 决定 (默认 3).
  */
-static u64 auto_disksize = 8589934592ULL; /* 8 GiB */
+static u64 auto_disksize = 6442450944ULL; /* 6 GiB */
 
 /* Module params (documentation at end) */
 static unsigned int num_devices = 1;

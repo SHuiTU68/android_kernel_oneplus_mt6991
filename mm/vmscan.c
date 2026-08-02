@@ -7299,6 +7299,18 @@ static bool throttle_direct_reclaim(gfp_t gfp_mask, struct zonelist *zonelist,
 	if (bypass)
 		goto out;
 
+	/*
+	 * Android tuning: do not throttle foreground tasks.
+	 * On phones, foreground allocations (SurfaceFlinger, app UI threads)
+	 * enter direct reclaim via GFP_KERNEL. The default killable wait
+	 * blocks them until kswapd makes progress, which under heavy memory
+	 * pressure causes multi-second UI freezes. Foreground tasks
+	 * (oom_score_adj <= 0) are allowed to proceed directly into
+	 * try_to_free_pages instead of blocking on pfmemalloc_wait.
+	 */
+	if (current->signal && current->signal->oom_score_adj <= 0)
+		goto out;
+
 	/* Account for the throttling */
 	count_vm_event(PGSCAN_DIRECT_THROTTLE);
 
