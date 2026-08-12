@@ -15,8 +15,26 @@
 #include <trace/events/power.h>
 #include <trace/hooks/sched.h>
 
-/* Forward declaration: defined in cpufreq_schedutil.c (6.6 kernel) */
-extern unsigned long get_capacity_ref_freq(struct cpufreq_policy *policy);
+/*
+ * Reference frequency used to correlate frequency and compute capacity.
+ * Inlined copy of the static function from cpufreq_schedutil.c (6.6.118)
+ * to avoid cross-object link dependency.
+ */
+static __always_inline
+unsigned long schedhorizon_capacity_ref_freq(struct cpufreq_policy *policy)
+{
+	unsigned int freq = arch_scale_freq_ref(policy->cpu);
+
+	if (freq)
+		return freq;
+	if (arch_scale_freq_invariant())
+		return policy->cpuinfo.max_freq;
+	/*
+	 * Apply a 25% margin so that we select a higher frequency than
+	 * the current one before the CPU is fully busy:
+	 */
+	return policy->cur + (policy->cur >> 2);
+}
 
 static unsigned int default_efficient_freq[] = {0};
 static u64 default_up_delay[] = {0};
@@ -229,7 +247,7 @@ static unsigned int get_next_freq(struct sugov_policy *sg_policy,
 				  unsigned long util, unsigned long max, u64 time)
 {
 	struct cpufreq_policy *policy = sg_policy->policy;
-	unsigned int freq = get_capacity_ref_freq(policy);
+	unsigned int freq = schedhorizon_capacity_ref_freq(policy);
 	unsigned int idx, l_freq, h_freq;
 	unsigned long next_freq = 0;
 
