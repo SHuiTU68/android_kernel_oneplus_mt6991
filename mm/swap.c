@@ -993,6 +993,7 @@ void folios_put_refs(struct folio_batch *folios, unsigned int *refs)
 	for (i = 0, j = 0; i < folios->nr; i++) {
 		struct folio *folio = folios->folios[i];
 		unsigned int nr_refs = refs ? refs[i] : 1;
+		bool direct_free = false;
 
 		if (is_huge_zero_page(&folio->page))
 			continue;
@@ -1024,6 +1025,7 @@ void folios_put_refs(struct folio_batch *folios, unsigned int *refs)
 		if (!folio_ref_sub_and_test(folio, nr_refs))
 			continue;
 
+try_to_free:
 		/* hugetlb has its own memcg */
 		if (folio_test_hugetlb(folio)) {
 			if (lruvec) {
@@ -1033,9 +1035,9 @@ void folios_put_refs(struct folio_batch *folios, unsigned int *refs)
 			free_huge_folio(folio);
 			continue;
 		}
+
 		folio_unqueue_deferred_split(folio);
 		__page_cache_release(folio, &lruvec, &flags);
-
 
 		if (j != i)
 			folios->folios[j] = folio;
