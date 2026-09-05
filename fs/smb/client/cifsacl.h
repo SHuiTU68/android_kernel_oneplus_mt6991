@@ -9,8 +9,7 @@
 #ifndef _CIFSACL_H
 #define _CIFSACL_H
 
-#define NUM_AUTHS (6)	/* number of authority fields */
-#define SID_MAX_SUB_AUTHORITIES (15) /* max number of sub authority fields */
+#include "../common/smbacl.h"
 
 #define READ_BIT        0x4
 #define WRITE_BIT       0x2
@@ -22,12 +21,6 @@
 
 #define UBITSHIFT	6
 #define GBITSHIFT	3
-
-#define ACCESS_ALLOWED	0
-#define ACCESS_DENIED	1
-
-#define SIDOWNER 1
-#define SIDGROUP 2
 
 /*
  * Security Descriptor length containing DACL with 3 ACEs (one each for
