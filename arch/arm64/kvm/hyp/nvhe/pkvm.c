@@ -746,7 +746,9 @@ static int init_pkvm_hyp_vcpu(struct pkvm_hyp_vcpu *hyp_vcpu,
 			goto done;
 	}
 
-	WARN_ON(pkvm_vcpu_init_psci(hyp_vcpu));
+	ret = pkvm_vcpu_init_psci(hyp_vcpu, mp_state);
+	if (ret)
+		goto done;
 	pkvm_vcpu_init_traps(hyp_vcpu);
 	kvm_reset_pvm_sys_regs(&hyp_vcpu->vcpu);
 done:

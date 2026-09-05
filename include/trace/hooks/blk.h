@@ -45,11 +45,9 @@ DECLARE_HOOK(android_vh_blk_mq_kick_requeue_list,
 DECLARE_HOOK(android_vh_check_set_ioprio,
 	TP_PROTO(struct bio *bio),
 	TP_ARGS(bio));
-
-struct request;
 DECLARE_HOOK(android_vh_loop_skip_queue_work,
-	TP_PROTO(struct request *req, bool *skip),
-	TP_ARGS(req, skip));
+        TP_PROTO(struct request *req, bool *skip),
+        TP_ARGS(req, skip));
 DECLARE_HOOK(android_vh_bio_add_page_merge_bypass,
 	TP_PROTO(struct bio *bio, bool *skip),
 	TP_ARGS(bio, skip));
