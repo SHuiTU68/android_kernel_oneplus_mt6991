@@ -2235,8 +2235,9 @@ free_it:
 		trace_android_vh_folio_trylock_clear(folio);
 		if (unlikely(folio_test_large(folio)))
 			destroy_large_folio(folio);
-		else
+		} else {
 			list_add(&folio->lru, &free_folios);
+		}
 		continue;
 
 activate_locked_split:

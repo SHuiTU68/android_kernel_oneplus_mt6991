@@ -17,6 +17,7 @@
 struct quirk_entry {
 	u32 s2idle_bug_mmio;
 	bool spurious_8042;
+	bool need_suspend_delay;
 };
 
 static struct quirk_entry quirk_s2idle_bug = {
@@ -25,6 +26,10 @@ static struct quirk_entry quirk_s2idle_bug = {
 
 static struct quirk_entry quirk_spurious_8042 = {
 	.spurious_8042 = true,
+};
+
+static struct quirk_entry quirk_s2idle_need_suspend_delay = {
+	.need_suspend_delay = true,
 };
 
 static const struct dmi_system_id fwbug_list[] = {
@@ -315,6 +320,11 @@ void amd_pmc_process_restore_quirks(struct amd_pmc_dev *dev)
 {
 	if (dev->quirks && dev->quirks->s2idle_bug_mmio)
 		amd_pmc_skip_nvme_smi_handler(dev->quirks->s2idle_bug_mmio);
+}
+
+bool amd_pmc_quirk_need_suspend_delay(struct amd_pmc_dev *dev)
+{
+	return dev->quirks && dev->quirks->need_suspend_delay;
 }
 
 void amd_pmc_quirks_init(struct amd_pmc_dev *dev)

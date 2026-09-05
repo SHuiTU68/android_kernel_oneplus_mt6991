@@ -42,6 +42,9 @@ struct nf_conntrack_expect {
 	/* Helper to assign to new connection */
 	struct nf_conntrack_helper *helper;
 
+	/* Helper to assign to new connection */
+	struct nf_conntrack_helper __rcu *assign_helper;
+
 	/* The conntrack of the master connection */
 	struct nf_conn *master;
 
