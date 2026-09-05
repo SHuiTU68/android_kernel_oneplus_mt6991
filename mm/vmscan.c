@@ -1800,6 +1800,7 @@ retry:
 		bool activate = false;
 		bool keep = false;
 		bool should_split_to_list = false;
+		bool bypass = false;
 
 		cond_resched();
 
@@ -2235,9 +2236,8 @@ free_it:
 		trace_android_vh_folio_trylock_clear(folio);
 		if (unlikely(folio_test_large(folio)))
 			destroy_large_folio(folio);
-		} else {
+		else
 			list_add(&folio->lru, &free_folios);
-		}
 		continue;
 
 activate_locked_split:
@@ -7336,7 +7336,6 @@ static bool throttle_direct_reclaim(gfp_t gfp_mask, struct zonelist *zonelist,
 	trace_android_vh_throttle_direct_reclaim_bypass(&bypass);
 	if (bypass)
 		goto out;
-
 	/*
 	 * Android tuning: do not throttle foreground tasks.
 	 * On phones, foreground allocations (SurfaceFlinger, app UI threads)
@@ -7693,6 +7692,9 @@ static bool kswapd_shrink_node(pg_data_t *pgdat,
 		sc->nr_to_reclaim += max(high_wmark_pages(zone), SWAP_CLUSTER_MAX);
 	}
 	trace_android_rvh_kswapd_shrink_node(&sc->nr_to_reclaim);
+
+	trace_android_rvh_kswapd_shrink_node_bypass(&sc->nr_to_reclaim, &sc->nr_scanned,
+						    &sc->nr_reclaimed, &bypass);
 
 	/*
 	 * Historically care was taken to put equal pressure on all zones but
