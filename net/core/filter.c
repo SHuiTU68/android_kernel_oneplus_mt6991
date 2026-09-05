@@ -2729,13 +2729,11 @@ BPF_CALL_4(bpf_msg_pull_data, struct sk_msg *, msg, u32, start,
 		poffset += len;
 		sge->length = 0;
 		put_page(sg_page(sge));
-		__clear_bit(i, msg->sg.copy);
 
 		sk_msg_iter_var_next(i);
 	} while (i != last_sge);
 
 	sg_set_page(&msg->sg.data[first_sge], page, copy, 0);
-	__clear_bit(first_sge, msg->sg.copy);
 
 	/* To repair sg ring we need to shift entries. If we only
 	 * had a single entry though we can just replace it and
@@ -2761,11 +2759,9 @@ BPF_CALL_4(bpf_msg_pull_data, struct sk_msg *, msg, u32, start,
 			break;
 
 		msg->sg.data[i] = msg->sg.data[move_from];
-		sk_msg_sg_copy_assign(msg, i, msg, move_from);
 		msg->sg.data[move_from].length = 0;
 		msg->sg.data[move_from].page_link = 0;
 		msg->sg.data[move_from].offset = 0;
-		__clear_bit(move_from, msg->sg.copy);
 		sk_msg_iter_var_next(i);
 	} while (1);
 
@@ -2794,7 +2790,6 @@ BPF_CALL_4(bpf_msg_push_data, struct sk_msg *, msg, u32, start,
 {
 	struct scatterlist sge, nsge, nnsge, rsge = {0}, *psge;
 	u32 new, i = 0, l = 0, space, copy = 0, offset = 0;
-	bool sge_copy, nsge_copy, nnsge_copy, rsge_copy = false;
 	u8 *raw, *to, *from;
 	struct page *page;
 
@@ -2829,9 +2824,6 @@ BPF_CALL_4(bpf_msg_push_data, struct sk_msg *, msg, u32, start,
 	 */
 	if (!space || (space == 1 && start != offset))
 		copy = msg->sg.data[i].length;
-
-	if (unlikely(copy + len < copy))
-		return -EINVAL;
 
 	page = alloc_pages(__GFP_NOWARN | GFP_ATOMIC | __GFP_COMP,
 			   get_order(copy + len));
@@ -2870,7 +2862,6 @@ BPF_CALL_4(bpf_msg_push_data, struct sk_msg *, msg, u32, start,
 			sk_msg_iter_var_prev(i);
 		psge = sk_msg_elem(msg, i);
 		rsge = sk_msg_elem_cpy(msg, i);
-		rsge_copy = test_bit(i, msg->sg.copy);
 
 		psge->length = start - offset;
 		rsge.length -= psge->length;
@@ -2895,32 +2886,24 @@ BPF_CALL_4(bpf_msg_push_data, struct sk_msg *, msg, u32, start,
 
 	/* Shift one or two slots as needed */
 	sge = sk_msg_elem_cpy(msg, new);
-	sge_copy = test_bit(new, msg->sg.copy);
 	sg_unmark_end(&sge);
 
 	nsge = sk_msg_elem_cpy(msg, i);
-	nsge_copy = test_bit(i, msg->sg.copy);
 	if (rsge.length) {
 		sk_msg_iter_var_next(i);
 		nnsge = sk_msg_elem_cpy(msg, i);
-		nnsge_copy = test_bit(i, msg->sg.copy);
 		sk_msg_iter_next(msg, end);
 	}
 
 	while (i != msg->sg.end) {
 		msg->sg.data[i] = sge;
-		__assign_bit(i, msg->sg.copy, sge_copy);
 		sge = nsge;
-		sge_copy = nsge_copy;
 		sk_msg_iter_var_next(i);
 		if (rsge.length) {
 			nsge = nnsge;
-			nsge_copy = nnsge_copy;
 			nnsge = sk_msg_elem_cpy(msg, i);
-			nnsge_copy = test_bit(i, msg->sg.copy);
 		} else {
 			nsge = sk_msg_elem_cpy(msg, i);
-			nsge_copy = test_bit(i, msg->sg.copy);
 		}
 	}
 
@@ -2934,7 +2917,6 @@ place_new:
 		get_page(sg_page(&rsge));
 		sk_msg_iter_var_next(new);
 		msg->sg.data[new] = rsge;
-		__assign_bit(new, msg->sg.copy, rsge_copy);
 	}
 
 	sk_msg_reset_curr(msg);
@@ -2962,33 +2944,25 @@ static void sk_msg_shift_left(struct sk_msg *msg, int i)
 		prev = i;
 		sk_msg_iter_var_next(i);
 		msg->sg.data[prev] = msg->sg.data[i];
-		sk_msg_sg_copy_assign(msg, prev, msg, i);
 	} while (i != msg->sg.end);
 
 	sk_msg_iter_prev(msg, end);
-	__clear_bit(msg->sg.end, msg->sg.copy);
 }
 
 static void sk_msg_shift_right(struct sk_msg *msg, int i)
 {
 	struct scatterlist tmp, sge;
-	bool tmp_copy, sge_copy;
 
 	sk_msg_iter_next(msg, end);
 	sge = sk_msg_elem_cpy(msg, i);
-	sge_copy = test_bit(i, msg->sg.copy);
 	sk_msg_iter_var_next(i);
 	tmp = sk_msg_elem_cpy(msg, i);
-	tmp_copy = test_bit(i, msg->sg.copy);
 
 	while (i != msg->sg.end) {
 		msg->sg.data[i] = sge;
-		__assign_bit(i, msg->sg.copy, sge_copy);
 		sk_msg_iter_var_next(i);
 		sge = tmp;
-		sge_copy = tmp_copy;
 		tmp = sk_msg_elem_cpy(msg, i);
-		tmp_copy = test_bit(i, msg->sg.copy);
 	}
 }
 
@@ -2996,8 +2970,8 @@ BPF_CALL_4(bpf_msg_pop_data, struct sk_msg *, msg, u32, start,
 	   u32, len, u64, flags)
 {
 	u32 i = 0, l = 0, space, offset = 0;
-	u64 last = (u64)start + len;
-	u32 pop;
+	u64 last = start + len;
+	int pop;
 
 	if (unlikely(flags))
 		return -EINVAL;
@@ -3048,8 +3022,6 @@ BPF_CALL_4(bpf_msg_pop_data, struct sk_msg *, msg, u32, start,
 		struct scatterlist *nsge, *sge = sk_msg_elem(msg, i);
 		int a = start - offset;
 		int b = sge->length - pop - a;
-		u32 sge_i = i;
-		bool sge_copy = test_bit(i, msg->sg.copy);
 
 		sk_msg_iter_var_next(i);
 
@@ -3062,7 +3034,6 @@ BPF_CALL_4(bpf_msg_pop_data, struct sk_msg *, msg, u32, start,
 				sg_set_page(nsge,
 					    sg_page(sge),
 					    b, sge->offset + pop + a);
-				__assign_bit(i, msg->sg.copy, sge_copy);
 			} else {
 				struct page *page, *orig;
 				u8 *to, *from;
@@ -3079,7 +3050,6 @@ BPF_CALL_4(bpf_msg_pop_data, struct sk_msg *, msg, u32, start,
 				memcpy(to, from, a);
 				memcpy(to + a, from + a + pop, b);
 				sg_set_page(sge, page, a + b, 0);
-				__clear_bit(sge_i, msg->sg.copy);
 				put_page(orig);
 			}
 			pop = 0;
@@ -4401,7 +4371,7 @@ u32 xdp_master_redirect(struct xdp_buff *xdp)
 	struct bpf_redirect_info *ri = this_cpu_ptr(&bpf_redirect_info);
 
 	master = netdev_master_upper_dev_get_rcu(xdp->rxq->dev);
-	if (unlikely(!master || !(master->flags & IFF_UP)))
+	if (unlikely(!(master->flags & IFF_UP)))
 		return XDP_ABORTED;
 	slave = master->netdev_ops->ndo_xdp_get_xmit_slave(master, xdp);
 	if (slave && slave != xdp->rxq->dev) {
@@ -5466,24 +5436,11 @@ static int sol_tcp_sockopt(struct sock *sk, int optname,
 				 KERNEL_SOCKPTR(optval), *optlen);
 }
 
-static bool sk_allows_sol_ip_sockopt(struct sock *sk)
-{
-	switch (sk->sk_family) {
-	case AF_INET:
-		return true;
-	case AF_INET6:
-		/* Allow getting/setting sockopt for possible ipv4-mapped ipv6 socket. */
-		return sk->sk_type != SOCK_RAW && !ipv6_only_sock(sk);
-	default:
-		return false;
-	}
-}
-
 static int sol_ip_sockopt(struct sock *sk, int optname,
 			  char *optval, int *optlen,
 			  bool getopt)
 {
-	if (!sk_allows_sol_ip_sockopt(sk))
+	if (sk->sk_family != AF_INET)
 		return -EINVAL;
 
 	switch (optname) {
@@ -5963,7 +5920,7 @@ static int bpf_ipv4_fib_lookup(struct net *net, struct bpf_fib_lookup *params,
 	struct neighbour *neigh;
 	struct net_device *dev;
 	struct fib_result res;
-	struct flowi4 fl4 = {};
+	struct flowi4 fl4;
 	u32 mtu = 0;
 	int err;
 
@@ -6100,7 +6057,7 @@ static int bpf_ipv6_fib_lookup(struct net *net, struct bpf_fib_lookup *params,
 	struct neighbour *neigh;
 	struct net_device *dev;
 	struct inet6_dev *idev;
-	struct flowi6 fl6 = {};
+	struct flowi6 fl6;
 	int strict = 0;
 	int oif, err;
 	u32 mtu = 0;
@@ -7968,39 +7925,43 @@ static const struct bpf_func_proto bpf_tcp_raw_check_syncookie_ipv6_proto = {
 
 #endif /* CONFIG_INET */
 
-bool bpf_helper_changes_pkt_data(enum bpf_func_id func_id)
+bool bpf_helper_changes_pkt_data(void *func)
 {
-	switch (func_id) {
-	case BPF_FUNC_clone_redirect:
-	case BPF_FUNC_l3_csum_replace:
-	case BPF_FUNC_l4_csum_replace:
-	case BPF_FUNC_lwt_push_encap:
-	case BPF_FUNC_lwt_seg6_action:
-	case BPF_FUNC_lwt_seg6_adjust_srh:
-	case BPF_FUNC_lwt_seg6_store_bytes:
-	case BPF_FUNC_msg_pop_data:
-	case BPF_FUNC_msg_pull_data:
-	case BPF_FUNC_msg_push_data:
-	case BPF_FUNC_skb_adjust_room:
-	case BPF_FUNC_skb_change_head:
-	case BPF_FUNC_skb_change_proto:
-	case BPF_FUNC_skb_change_tail:
-	case BPF_FUNC_skb_pull_data:
-	case BPF_FUNC_skb_store_bytes:
-	case BPF_FUNC_skb_vlan_pop:
-	case BPF_FUNC_skb_vlan_push:
-	case BPF_FUNC_store_hdr_opt:
-	case BPF_FUNC_xdp_adjust_head:
-	case BPF_FUNC_xdp_adjust_meta:
-	case BPF_FUNC_xdp_adjust_tail:
-	/* tail-called program could call any of the above */
-	case BPF_FUNC_tail_call:
+	if (func == bpf_skb_vlan_push ||
+	    func == bpf_skb_vlan_pop ||
+	    func == bpf_skb_store_bytes ||
+	    func == bpf_skb_change_proto ||
+	    func == bpf_skb_change_head ||
+	    func == sk_skb_change_head ||
+	    func == bpf_skb_change_tail ||
+	    func == sk_skb_change_tail ||
+	    func == bpf_skb_adjust_room ||
+	    func == sk_skb_adjust_room ||
+	    func == bpf_skb_pull_data ||
+	    func == sk_skb_pull_data ||
+	    func == bpf_clone_redirect ||
+	    func == bpf_l3_csum_replace ||
+	    func == bpf_l4_csum_replace ||
+	    func == bpf_xdp_adjust_head ||
+	    func == bpf_xdp_adjust_meta ||
+	    func == bpf_msg_pull_data ||
+	    func == bpf_msg_push_data ||
+	    func == bpf_msg_pop_data ||
+	    func == bpf_xdp_adjust_tail ||
+#if IS_ENABLED(CONFIG_IPV6_SEG6_BPF)
+	    func == bpf_lwt_seg6_store_bytes ||
+	    func == bpf_lwt_seg6_adjust_srh ||
+	    func == bpf_lwt_seg6_action ||
+#endif
+#ifdef CONFIG_INET
+	    func == bpf_sock_ops_store_hdr_opt ||
+#endif
+	    func == bpf_lwt_in_push_encap ||
+	    func == bpf_lwt_xmit_push_encap)
 		return true;
-	default:
-		return false;
-	}
-}
 
+	return false;
+}
 
 const struct bpf_func_proto bpf_event_output_data_proto __weak;
 const struct bpf_func_proto bpf_sk_storage_get_cg_sock_proto __weak;
@@ -11138,6 +11099,7 @@ const struct bpf_verifier_ops lwt_seg6local_verifier_ops = {
 };
 
 const struct bpf_prog_ops lwt_seg6local_prog_ops = {
+	.test_run		= bpf_prog_test_run_skb,
 };
 
 const struct bpf_verifier_ops cg_sock_verifier_ops = {

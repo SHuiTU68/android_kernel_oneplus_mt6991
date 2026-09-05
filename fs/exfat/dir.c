@@ -565,7 +565,7 @@ void exfat_remove_entries(struct inode *inode, struct exfat_entry_set_cache *es,
 	for (i = order; i < es->num_entries; i++) {
 		ep = exfat_get_dentry_cached(es, i);
 
-		if (free_benign && (exfat_get_entry_type(ep) & TYPE_BENIGN_SEC))
+		if (exfat_get_entry_type(ep) & TYPE_BENIGN_SEC)
 			exfat_free_benign_secondary_clusters(inode, ep);
 
 		exfat_set_entry_type(ep, TYPE_DELETED);
@@ -1133,26 +1133,22 @@ rewind:
 				continue;
 			}
 
+			brelse(bh);
 			if (entry_type == TYPE_EXTEND) {
 				unsigned short entry_uniname[16], unichar;
-				unsigned int offset;
 
 				if (step != DIRENT_STEP_NAME ||
 				    name_len >= MAX_NAME_LENGTH) {
-					brelse(bh);
 					step = DIRENT_STEP_FILE;
 					continue;
 				}
 
-				offset = (++order - 2) * EXFAT_FILE_NAME_LEN;
+				if (++order == 2)
+					uniname = p_uniname->name;
+				else
+					uniname += EXFAT_FILE_NAME_LEN;
+
 				len = exfat_extract_uni_name(ep, entry_uniname);
-				brelse(bh);
-				if (offset > MAX_NAME_LENGTH ||
-				    len > MAX_NAME_LENGTH - offset) {
-					step = DIRENT_STEP_FILE;
-					continue;
-				}
-				uniname = p_uniname->name + offset;
 				name_len += len;
 
 				unichar = *(uniname+len);
@@ -1171,7 +1167,6 @@ rewind:
 				continue;
 			}
 
-			brelse(bh);
 			if (entry_type &
 					(TYPE_CRITICAL_SEC | TYPE_BENIGN_SEC)) {
 				if (step == DIRENT_STEP_SECD) {

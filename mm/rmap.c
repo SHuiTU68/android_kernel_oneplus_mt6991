@@ -1780,7 +1780,9 @@ static bool try_to_unmap_one(struct folio *folio, struct vm_area_struct *vma,
 				VM_BUG_ON(!(flags & TTU_RMAP_LOCKED));
 				if (!hugetlb_vma_trylock_write(vma))
 					goto walk_abort;
-				if (huge_pmd_unshare(mm, vma, address, pvmw.pte)) {
+
+				tlb_gather_mmu_vma(&tlb, vma);
+				if (huge_pmd_unshare(&tlb, vma, address, pvmw.pte)) {
 					hugetlb_vma_unlock_write(vma);
 					huge_pmd_unshare_flush(&tlb, vma);
 					tlb_finish_mmu(&tlb);

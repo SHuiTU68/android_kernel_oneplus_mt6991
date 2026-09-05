@@ -29,6 +29,8 @@
 #include <linux/rcupdate_trace.h>
 #include <linux/static_call.h>
 #include <linux/memcontrol.h>
+#include <linux/cfi.h>
+#include <linux/android_kabi.h>
 
 struct bpf_verifier_env;
 struct bpf_verifier_log;
@@ -172,6 +174,9 @@ struct bpf_map_ops {
 
 	/* bpf_iter info used to open a seq_file */
 	const struct bpf_iter_seq_info *iter_seq_info;
+
+	ANDROID_KABI_RESERVE(1);
+	ANDROID_KABI_RESERVE(2);
 };
 
 enum {
@@ -193,20 +198,6 @@ enum btf_field_type {
 				 BPF_RB_NODE | BPF_RB_ROOT,
 	BPF_REFCOUNT   = (1 << 8),
 };
-
-enum bpf_cgroup_storage_type {
-	BPF_CGROUP_STORAGE_SHARED,
-	BPF_CGROUP_STORAGE_PERCPU,
-	__BPF_CGROUP_STORAGE_MAX
-#define MAX_BPF_CGROUP_STORAGE_TYPE __BPF_CGROUP_STORAGE_MAX
-};
-
-#ifdef CONFIG_CGROUP_BPF
-# define for_each_cgroup_storage_type(stype) \
-	for (stype = 0; stype < MAX_BPF_CGROUP_STORAGE_TYPE; stype++)
-#else
-# define for_each_cgroup_storage_type(stype) for (; false; )
-#endif /* CONFIG_CGROUP_BPF */
 
 typedef void (*btf_dtor_kfunc_t)(void *);
 
@@ -258,20 +249,6 @@ struct bpf_list_node_kern {
 	void *owner;
 } __attribute__((aligned(8)));
 
-/* 'Ownership' of program-containing map is claimed by the first program
- * that is going to use this map or by the first program which FD is
- * stored in the map to make sure that all callers and callees have the
- * same prog type, JITed flag and xdp_has_frags flag.
- */
-struct bpf_map_owner {
-	enum bpf_prog_type type;
-	bool jited;
-	bool xdp_has_frags;
-	u64 storage_cookie[MAX_BPF_CGROUP_STORAGE_TYPE];
-	const struct btf_type *attach_func_proto;
-	enum bpf_attach_type expected_attach_type;
-};
-
 struct bpf_map {
 	/* The first two cachelines with read-mostly members of which some
 	 * are also accessed in fast-path (e.g. ops, max_entries).
@@ -310,15 +287,21 @@ struct bpf_map {
 	};
 	struct mutex freeze_mutex;
 	atomic64_t writecnt;
-	spinlock_t owner_lock;
-	struct bpf_map_owner *owner;
+	/* 'Ownership' of program-containing map is claimed by the first program
+	 * that is going to use this map or by the first program which FD is
+	 * stored in the map to make sure that all callers and callees have the
+	 * same prog type, JITed flag and xdp_has_frags flag.
+	 */
+	struct {
+		spinlock_t lock;
+		enum bpf_prog_type type;
+		bool jited;
+		bool xdp_has_frags;
+	} owner;
 	bool bypass_spec_v1;
 	bool frozen; /* write-once; write-protected by freeze_mutex */
 	bool free_after_mult_rcu_gp;
-	bool free_after_rcu_gp;
-	atomic64_t sleepable_refcnt;
 	s64 __percpu *elem_count;
-	u64 cookie; /* write-once */
 };
 
 static inline const char *btf_field_type_name(enum btf_field_type type)
@@ -555,6 +538,8 @@ struct bpf_map_dev_ops {
 	int (*map_update_elem)(struct bpf_offloaded_map *map,
 			       void *key, void *value, u64 flags);
 	int (*map_delete_elem)(struct bpf_offloaded_map *map, void *key);
+
+	ANDROID_KABI_RESERVE(1);
 };
 
 struct bpf_offloaded_map {
@@ -635,7 +620,6 @@ enum bpf_type_flag {
 	 */
 	PTR_UNTRUSTED		= BIT(6 + BPF_BASE_TYPE_BITS),
 
-	/* MEM can be uninitialized. */
 	MEM_UNINIT		= BIT(7 + BPF_BASE_TYPE_BITS),
 
 	/* DYNPTR points to memory local to the bpf program. */
@@ -699,14 +683,9 @@ enum bpf_type_flag {
 	/* Memory must be aligned on some architectures, used in combination with
 	 * MEM_FIXED_SIZE.
 	 */
+#ifndef __GENKSYMS__
 	MEM_ALIGNED		= BIT(17 + BPF_BASE_TYPE_BITS),
-
-	/* MEM is being written to, often combined with MEM_UNINIT. Non-presence
-	 * of MEM_WRITE means that MEM is only being read. MEM_WRITE without the
-	 * MEM_UNINIT means that memory needs to be initialized since it is also
-	 * read.
-	 */
-	MEM_WRITE		= BIT(18 + BPF_BASE_TYPE_BITS),
+#endif
 
 	__BPF_TYPE_FLAG_MAX,
 	__BPF_TYPE_LAST_FLAG	= __BPF_TYPE_FLAG_MAX - 1,
@@ -744,6 +723,8 @@ enum bpf_arg_type {
 	ARG_ANYTHING,		/* any (initialized) argument is ok */
 	ARG_PTR_TO_SPIN_LOCK,	/* pointer to bpf_spin_lock */
 	ARG_PTR_TO_SOCK_COMMON,	/* pointer to sock_common */
+	ARG_PTR_TO_INT,		/* pointer to int ANDROID: NOT USED, kept for ABI stability */
+	ARG_PTR_TO_LONG,	/* pointer to long ANDROID: NOT USED, kept for ABI stability */
 	ARG_PTR_TO_SOCKET,	/* pointer to bpf_sock (fullsock) */
 	ARG_PTR_TO_BTF_ID,	/* pointer to in-kernel struct */
 	ARG_PTR_TO_RINGBUF_MEM,	/* pointer to dynamically reserved ringbuf memory */
@@ -765,10 +746,10 @@ enum bpf_arg_type {
 	ARG_PTR_TO_SOCKET_OR_NULL	= PTR_MAYBE_NULL | ARG_PTR_TO_SOCKET,
 	ARG_PTR_TO_STACK_OR_NULL	= PTR_MAYBE_NULL | ARG_PTR_TO_STACK,
 	ARG_PTR_TO_BTF_ID_OR_NULL	= PTR_MAYBE_NULL | ARG_PTR_TO_BTF_ID,
-	/* Pointer to memory does not need to be initialized, since helper function
-	 * fills all bytes or clears them in error case.
+	/* pointer to memory does not need to be initialized, helper function must fill
+	 * all bytes or clear them in error case.
 	 */
-	ARG_PTR_TO_UNINIT_MEM		= MEM_UNINIT | MEM_WRITE | ARG_PTR_TO_MEM,
+	ARG_PTR_TO_UNINIT_MEM		= MEM_UNINIT | ARG_PTR_TO_MEM,
 	/* Pointer to valid memory of size known at compile time. */
 	ARG_PTR_TO_FIXED_SIZE_MEM	= MEM_FIXED_SIZE | ARG_PTR_TO_MEM,
 
@@ -984,6 +965,7 @@ struct bpf_verifier_ops {
 	int (*btf_struct_access)(struct bpf_verifier_log *log,
 				 const struct bpf_reg_state *reg,
 				 int off, int size);
+	ANDROID_KABI_RESERVE(1);
 };
 
 struct bpf_prog_offload_ops {
@@ -999,6 +981,7 @@ struct bpf_prog_offload_ops {
 	int (*prepare)(struct bpf_prog *prog);
 	int (*translate)(struct bpf_prog *prog);
 	void (*destroy)(struct bpf_prog *prog);
+	ANDROID_KABI_RESERVE(1);
 };
 
 struct bpf_prog_offload {
@@ -1011,7 +994,16 @@ struct bpf_prog_offload {
 	bool			opt_failed;
 	void			*jited_image;
 	u32			jited_len;
+	ANDROID_KABI_RESERVE(1);
 };
+
+enum bpf_cgroup_storage_type {
+	BPF_CGROUP_STORAGE_SHARED,
+	BPF_CGROUP_STORAGE_PERCPU,
+	__BPF_CGROUP_STORAGE_MAX
+};
+
+#define MAX_BPF_CGROUP_STORAGE_TYPE __BPF_CGROUP_STORAGE_MAX
 
 /* The longest tracepoint has 12 args.
  * See include/trace/bpf_probe.h
@@ -1071,6 +1063,17 @@ struct btf_func_model {
  * cache and restore tail_call_cnt to avoid infinite tail call loop.
  */
 #define BPF_TRAMP_F_TAIL_CALL_CTX	BIT(7)
+
+/*
+ * Indicate the trampoline should be suitable to receive indirect calls;
+ * without this indirectly calling the generated code can result in #UD/#CP,
+ * depending on the CFI options.
+ *
+ * Used by bpf_struct_ops.
+ *
+ * Incompatible with FENTRY usage, overloads @func_addr argument.
+ */
+#define BPF_TRAMP_F_INDIRECT		BIT(8)
 
 /* Each call __bpf_prog_enter + call bpf_func + call __bpf_prog_exit is ~50
  * bytes on x86.
@@ -1183,6 +1186,7 @@ struct bpf_trampoline {
 	/* Executable image of trampoline */
 	struct bpf_tramp_image *cur_image;
 	struct module *mod;
+	ANDROID_KABI_RESERVE(1);
 };
 
 struct bpf_attach_target_info {
@@ -1214,9 +1218,14 @@ struct bpf_dispatcher {
 	struct static_call_key *sc_key;
 	void *sc_tramp;
 #endif
+	ANDROID_KABI_RESERVE(1);
 };
 
-static __always_inline __nocfi unsigned int bpf_dispatcher_nop_func(
+#ifndef __bpfcall
+#define __bpfcall __nocfi
+#endif
+
+static __always_inline __bpfcall unsigned int bpf_dispatcher_nop_func(
 	const void *ctx,
 	const struct bpf_insn *insnsi,
 	bpf_func_t bpf_func)
@@ -1306,7 +1315,7 @@ int arch_prepare_bpf_dispatcher(void *image, void *buf, s64 *funcs, int num_func
 
 #define DEFINE_BPF_DISPATCHER(name)					\
 	__BPF_DISPATCHER_SC(name);					\
-	noinline __nocfi unsigned int bpf_dispatcher_##name##_func(	\
+	noinline __bpfcall unsigned int bpf_dispatcher_##name##_func(	\
 		const void *ctx,					\
 		const struct bpf_insn *insnsi,				\
 		bpf_func_t bpf_func)					\
@@ -1441,7 +1450,6 @@ struct bpf_prog_aux {
 	bool sleepable;
 	bool tail_call_reachable;
 	bool xdp_has_frags;
-	bool changes_pkt_data;
 	/* BTF_KIND_FUNC_PROTO for valid attach_btf_id */
 	const struct btf_type *attach_func_proto;
 	/* function name for valid attach_btf_id */
@@ -1452,6 +1460,9 @@ struct bpf_prog_aux {
 	struct bpf_kfunc_desc_tab *kfunc_tab;
 	struct bpf_kfunc_btf_tab *kfunc_btf_tab;
 	u32 size_poke_tab;
+#ifdef CONFIG_FINEIBT
+	struct bpf_ksym ksym_prefix;
+#endif
 	struct bpf_ksym ksym;
 	const struct bpf_prog_ops *ops;
 	struct bpf_map **used_maps;
@@ -1500,6 +1511,7 @@ struct bpf_prog_aux {
 		struct work_struct work;
 		struct rcu_head	rcu;
 	};
+	ANDROID_KABI_RESERVE(1);
 };
 
 struct bpf_prog {
@@ -1529,6 +1541,7 @@ struct bpf_prog {
 					    const struct bpf_insn *insn);
 	struct bpf_prog_aux	*aux;		/* Auxiliary fields */
 	struct sock_fprog_kern	*orig_prog;	/* Original BPF program */
+	ANDROID_KABI_RESERVE(1);
 	/* Instructions for interpreter */
 	union {
 		DECLARE_FLEX_ARRAY(struct sock_filter, insns);
@@ -1578,6 +1591,7 @@ struct bpf_link_ops {
 			      struct bpf_link_info *info);
 	int (*update_map)(struct bpf_link *link, struct bpf_map *new_map,
 			  struct bpf_map *old_map);
+	ANDROID_KABI_RESERVE(1);
 };
 
 struct bpf_tramp_link {
@@ -1675,6 +1689,8 @@ struct bpf_struct_ops {
 	struct btf_func_model func_models[BPF_STRUCT_OPS_MAX_NR_MEMBERS];
 	u32 type_id;
 	u32 value_id;
+	void *cfi_stubs;
+	ANDROID_KABI_RESERVE(1);
 };
 
 #if defined(CONFIG_BPF_JIT) && defined(CONFIG_BPF_SYSCALL)
@@ -1688,6 +1704,7 @@ int bpf_struct_ops_map_sys_lookup_elem(struct bpf_map *map, void *key,
 int bpf_struct_ops_prepare_trampoline(struct bpf_tramp_links *tlinks,
 				      struct bpf_tramp_link *link,
 				      const struct btf_func_model *model,
+				      void *stub_func,
 				      void *image, void *image_end);
 static inline bool bpf_try_module_get(const void *data, struct module *owner)
 {
@@ -1820,16 +1837,6 @@ static inline bool bpf_map_flags_access_ok(u32 access_flags)
 {
 	return (access_flags & (BPF_F_RDONLY_PROG | BPF_F_WRONLY_PROG)) !=
 	       (BPF_F_RDONLY_PROG | BPF_F_WRONLY_PROG);
-}
-
-static inline struct bpf_map_owner *bpf_map_owner_alloc(struct bpf_map *map)
-{
-	return kzalloc(sizeof(*map->owner), GFP_ATOMIC);
-}
-
-static inline void bpf_map_owner_free(struct bpf_map *map)
-{
-	kfree(map->owner);
 }
 
 struct bpf_event_entry {
@@ -2046,9 +2053,6 @@ bpf_prog_run_array_uprobe(const struct bpf_prog_array *array,
 	migrate_enable();
 	return ret;
 }
-
-#define bpf_rcu_lock_held() \
-	(rcu_read_lock_held() || rcu_read_lock_trace_held() || rcu_read_lock_bh_held())
 
 #ifdef CONFIG_BPF_SYSCALL
 DECLARE_PER_CPU(int, bpf_prog_active);
