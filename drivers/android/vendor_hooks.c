@@ -85,6 +85,7 @@
 #include <trace/events/android_vendor_lmk.h>
 #include <trace/hooks/swapfile.h>
 #include <trace/hooks/rcu.h>
+#include <trace/hooks/sound.h>
 
 /*
  * Export tracepoints that act as a bare tracehook (ie: have no trace event
