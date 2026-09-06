@@ -28,6 +28,7 @@
 
 static void virtio_transport_cancel_close_work(struct vsock_sock *vsk,
 					       bool cancel_timeout);
+static s64 virtio_transport_has_space(struct virtio_vsock_sock *vvs);
 
 static const struct virtio_transport *
 virtio_transport_get_ops(struct vsock_sock *vsk)
@@ -145,7 +146,7 @@ static struct sk_buff *virtio_transport_build_skb(void *opaque)
 	 * by the sender to reflect the fragment size.
 	 */
 	pkt_hdr = virtio_vsock_hdr(pkt);
-	payload_len = pkt->len;
+	payload_len = le32_to_cpu(pkt_hdr->len);
 
 	skb = alloc_skb(sizeof(*hdr) + sizeof(*pkt_hdr) + payload_len,
 			GFP_ATOMIC);
@@ -1082,20 +1083,6 @@ static void virtio_transport_cancel_close_work(struct vsock_sock *vsk,
 		/* Release refcnt obtained when we scheduled the timeout */
 		sock_put(sk);
 	}
-}
-
-static void virtio_transport_do_close(struct vsock_sock *vsk,
-				      bool cancel_timeout)
-{
-	struct sock *sk = sk_vsock(vsk);
-
-	sock_set_flag(sk, SOCK_DONE);
-	vsk->peer_shutdown = SHUTDOWN_MASK;
-	if (vsock_stream_has_data(vsk) <= 0)
-		sk->sk_state = TCP_CLOSING;
-	sk->sk_state_change(sk);
-
-	virtio_transport_cancel_close_work(vsk, cancel_timeout);
 }
 
 static void virtio_transport_do_close(struct vsock_sock *vsk,
