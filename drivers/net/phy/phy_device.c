@@ -1432,9 +1432,6 @@ int phy_sfp_probe(struct phy_device *phydev,
 
 		ret = sfp_bus_add_upstream(bus, phydev, ops);
 		sfp_bus_put(bus);
-
-		if (ret)
-			phydev->sfp_bus = NULL;
 	}
 	return ret;
 }
@@ -3408,7 +3405,7 @@ static int phy_probe(struct device *dev)
 	 * LEDs for them.
 	 */
 	if (IS_ENABLED(CONFIG_PHYLIB_LEDS) && !phy_driver_is_genphy(phydev) &&
-	    !phy_driver_is_genphy_10g(phydev))
+	    !phy_driver_is_genphy_10g(phydev)) {
 		err = of_phy_leds(phydev);
 		if (err)
 			goto out;
@@ -3417,9 +3414,6 @@ static int phy_probe(struct device *dev)
 	return 0;
 
 out:
-	sfp_bus_del_upstream(phydev->sfp_bus);
-	phydev->sfp_bus = NULL;
-
 	if (!phydev->is_on_sfp_module)
 		phy_led_triggers_unregister(phydev);
 

@@ -175,7 +175,26 @@ static int __nf_conncount_add(struct net *net,
 	bool refcounted = false;
 	int err = 0;
 
-	if ((u32)jiffies == list->last_gc)
+	if (!get_ct_or_tuple_from_skb(net, skb, l3num, &ct, &tuple, &zone, &refcounted))
+		return -ENOENT;
+
+	if (ct && nf_ct_is_confirmed(ct)) {
+		/* local connections are confirmed in postrouting so confirmation
+		 * might have happened before hitting connlimit
+		 */
+		if (skb->skb_iif != LOOPBACK_IFINDEX) {
+			err = -EEXIST;
+			goto out_put;
+		}
+
+		/* this is likely a local connection, skip optimization to avoid
+		 * adding duplicates from a 'packet train'
+		 */
+		goto check_connections;
+	}
+
+	if ((u32)jiffies == list->last_gc &&
+	    (list->count - list->last_gc_count) < CONNCOUNT_GC_MAX_COLLECT)
 		goto add_new_node;
 
 check_connections:
@@ -189,8 +208,8 @@ check_connections:
 			/* Not found, but might be about to be confirmed */
 			if (PTR_ERR(found) == -EAGAIN) {
 				if (nf_ct_tuple_equal(&conn->tuple, &tuple) &&
-				    nf_ct_zone_id(&conn->zone, IP_CT_DIR_ORIGINAL) ==
-				    nf_ct_zone_id(zone, IP_CT_DIR_ORIGINAL))
+				    nf_ct_zone_id(&conn->zone, conn->zone.dir) ==
+				    nf_ct_zone_id(zone, zone->dir))
 					goto out_put; /* already exists */
 			} else {
 				collect++;
@@ -201,7 +220,7 @@ check_connections:
 		found_ct = nf_ct_tuplehash_to_ctrack(found);
 
 		if (nf_ct_tuple_equal(&conn->tuple, &tuple) &&
-		    nf_ct_zone_equal(found_ct, zone, IP_CT_DIR_ORIGINAL)) {
+		    nf_ct_zone_equal(found_ct, zone, zone->dir)) {
 			/*
 			 * We should not see tuples twice unless someone hooks
 			 * this into a table without "-p tcp --syn".
@@ -289,10 +308,6 @@ static bool __nf_conncount_gc_list(struct net *net,
 
 	/* don't bother if we just did GC */
 	if ((u32)jiffies == READ_ONCE(list->last_gc))
-		return false;
-
-	/* don't bother if other cpu is already doing GC */
-	if (!spin_trylock(&list->list_lock))
 		return false;
 
 	list_for_each_entry_safe(conn, conn_n, &list->head, node) {
@@ -462,20 +477,6 @@ restart:
 		rb_link_node_rcu(&rbconn->node, parent, rbnode);
 		rb_insert_color(&rbconn->node, root);
 	}
-
-	conn->tuple = *tuple;
-	conn->zone = *zone;
-	conn->cpu = raw_smp_processor_id();
-	conn->jiffies32 = (u32)jiffies;
-	memcpy(rbconn->key, key, sizeof(u32) * data->keylen);
-
-	nf_conncount_list_init(&rbconn->list);
-	list_add(&conn->node, &rbconn->list.head);
-	count = 1;
-	rbconn->list.count = count;
-
-	rb_link_node_rcu(&rbconn->node, parent, rbnode);
-	rb_insert_color(&rbconn->node, root);
 out_unlock:
 	if (refcounted)
 		nf_ct_put(ct);
@@ -498,7 +499,7 @@ count_tree(struct net *net,
 	hash = jhash2(key, data->keylen, conncount_rnd) % CONNCOUNT_SLOTS;
 	root = &data->root[hash];
 
-	parent = rcu_dereference(root->rb_node);
+	parent = rcu_dereference_raw(root->rb_node);
 	while (parent) {
 		int diff;
 
@@ -506,9 +507,9 @@ count_tree(struct net *net,
 
 		diff = key_diff(key, rbconn->key, data->keylen);
 		if (diff < 0) {
-			parent = rcu_dereference(parent->rb_left);
+			parent = rcu_dereference_raw(parent->rb_left);
 		} else if (diff > 0) {
-			parent = rcu_dereference(parent->rb_right);
+			parent = rcu_dereference_raw(parent->rb_right);
 		} else {
 			int ret;
 
